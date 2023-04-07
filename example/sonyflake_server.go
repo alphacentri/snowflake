@@ -5,14 +5,13 @@ import (
 	"net/http"
 
 	"github.com/sony/sonyflake"
-	"github.com/sony/sonyflake/awsutil"
 )
 
 var sf *sonyflake.Sonyflake
 
 func init() {
 	var st sonyflake.Settings
-	st.MachineID = awsutil.AmazonEC2MachineID
+	//st.NodeID = sonyflake.Lower64BitPrivateIP(), nil
 	sf = sonyflake.NewSonyflake(st)
 	if sf == nil {
 		panic("sonyflake not created")

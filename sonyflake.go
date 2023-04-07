@@ -9,16 +9,16 @@ package sonyflake
 
 import (
 	"errors"
-	"net"
 	"sync"
 	"time"
+	"net"
 )
 
 // These constants are the bit lengths of Sonyflake ID parts.
 const (
-	BitLenTime      = 39                               // bit length of time
-	BitLenSequence  = 8                                // bit length of sequence number
-	BitLenMachineID = 63 - BitLenTime - BitLenSequence // bit length of machine id
+	BitLenTime      = 42 // bit length of time
+	BitLenSequence  = 12 // bit length of sequence number
+	BitLenNodeID    = 10 // bit length of machine id
 )
 
 // Settings configures Sonyflake:
@@ -27,18 +27,18 @@ const (
 // If StartTime is 0, the start time of the Sonyflake is set to "2014-09-01 00:00:00 +0000 UTC".
 // If StartTime is ahead of the current time, Sonyflake is not created.
 //
-// MachineID returns the unique ID of the Sonyflake instance.
-// If MachineID returns an error, Sonyflake is not created.
-// If MachineID is nil, default MachineID is used.
-// Default MachineID returns the lower 16 bits of the private IP address.
+// NodeID returns the unique ID of the Sonyflake instance.
+// If NodeID returns an error, Sonyflake is not created.
+// If NodeID is nil, default NodeID is used.
+// Default NodeID returns the lower 16 bits of the private IP address.
 //
-// CheckMachineID validates the uniqueness of the machine ID.
-// If CheckMachineID returns false, Sonyflake is not created.
-// If CheckMachineID is nil, no validation is done.
+// CheckNodeID validates the uniqueness of the machine ID.
+// If CheckNodeID returns false, Sonyflake is not created.
+// If CheckNodeID is nil, no validation is done.
 type Settings struct {
 	StartTime      time.Time
-	MachineID      func() (uint16, error)
-	CheckMachineID func(uint16) bool
+	NodeID      func() (uint64, error)
+	CheckNodeID func(uint64) bool
 }
 
 // Sonyflake is a distributed unique ID generator.
@@ -46,36 +46,37 @@ type Sonyflake struct {
 	mutex       *sync.Mutex
 	startTime   int64
 	elapsedTime int64
-	sequence    uint16
-	machineID   uint16
+	sequence    uint64
+	nodeID   	uint64
 }
 
 // NewSonyflake returns a new Sonyflake configured with the given Settings.
 // NewSonyflake returns nil in the following cases:
 // - Settings.StartTime is ahead of the current time.
-// - Settings.MachineID returns an error.
-// - Settings.CheckMachineID returns false.
+// - Settings.NodeID returns an error.
+// - Settings.CheckNodeID returns false.
 func NewSonyflake(st Settings) *Sonyflake {
 	sf := new(Sonyflake)
 	sf.mutex = new(sync.Mutex)
-	sf.sequence = uint16(1<<BitLenSequence - 1)
+	sf.sequence = uint64(1<<BitLenSequence - 1)
 
 	if st.StartTime.After(time.Now()) {
 		return nil
 	}
 	if st.StartTime.IsZero() {
-		sf.startTime = toSonyflakeTime(time.Date(2014, 9, 1, 0, 0, 0, 0, time.UTC))
+		sf.startTime = toSonyflakeTime(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
 	} else {
 		sf.startTime = toSonyflakeTime(st.StartTime)
 	}
 
 	var err error
-	if st.MachineID == nil {
-		sf.machineID, err = lower16BitPrivateIP()
-	} else {
-		sf.machineID, err = st.MachineID()
-	}
-	if err != nil || (st.CheckMachineID != nil && !st.CheckMachineID(sf.machineID)) {
+	//if st.NodeID == nil {
+		//sf.nodeID, err = uint64(0), nil
+		sf.nodeID, err = Lower64BitPrivateIP()
+	// else {
+	//	sf.nodeID, err = st.NodeID()
+	//}
+	if err != nil || (st.CheckNodeID != nil && !st.CheckNodeID(sf.nodeID)) {
 		return nil
 	}
 
@@ -85,7 +86,7 @@ func NewSonyflake(st Settings) *Sonyflake {
 // NextID generates a next unique ID.
 // After the Sonyflake time overflows, NextID returns an error.
 func (sf *Sonyflake) NextID() (uint64, error) {
-	const maskSequence = uint16(1<<BitLenSequence - 1)
+	const maskSequence = uint64(1<<BitLenSequence - 1)
 
 	sf.mutex.Lock()
 	defer sf.mutex.Unlock()
@@ -126,9 +127,9 @@ func (sf *Sonyflake) toID() (uint64, error) {
 		return 0, errors.New("over the time limit")
 	}
 
-	return uint64(sf.elapsedTime)<<(BitLenSequence+BitLenMachineID) |
-		uint64(sf.sequence)<<BitLenMachineID |
-		uint64(sf.machineID), nil
+	return uint64(sf.elapsedTime)<<(BitLenSequence+BitLenNodeID) |
+		uint64(sf.sequence)<<BitLenNodeID |
+		uint64(sf.nodeID), nil
 }
 
 func privateIPv4() (net.IP, error) {
@@ -156,13 +157,13 @@ func isPrivateIPv4(ip net.IP) bool {
 		(ip[0] == 10 || ip[0] == 172 && (ip[1] >= 16 && ip[1] < 32) || ip[0] == 192 && ip[1] == 168)
 }
 
-func lower16BitPrivateIP() (uint16, error) {
+func Lower64BitPrivateIP() (uint64, error) {
 	ip, err := privateIPv4()
 	if err != nil {
 		return 0, err
 	}
 
-	return uint16(ip[2])<<8 + uint16(ip[3]), nil
+	return uint64(ip[2])<<8 + uint64(ip[3]), nil
 }
 
 // ElapsedTime returns the elapsed time when the given Sonyflake ID was generated.
@@ -171,32 +172,32 @@ func ElapsedTime(id uint64) time.Duration {
 }
 
 func elapsedTime(id uint64) uint64 {
-	return id >> (BitLenSequence + BitLenMachineID)
+	return id >> (BitLenSequence + BitLenNodeID)
 }
 
 // SequenceNumber returns the sequence number of a Sonyflake ID.
 func SequenceNumber(id uint64) uint64 {
-	const maskSequence = uint64((1<<BitLenSequence - 1) << BitLenMachineID)
-	return id & maskSequence >> BitLenMachineID
+	const maskSequence = uint64((1<<BitLenSequence - 1) << BitLenNodeID)
+	return id & maskSequence >> BitLenNodeID
 }
 
-// MachineID returns the machine ID of a Sonyflake ID.
-func MachineID(id uint64) uint64 {
-	const maskMachineID = uint64(1<<BitLenMachineID - 1)
-	return id & maskMachineID
+// NodeID returns the machine ID of a Sonyflake ID.
+func NodeID(id uint64) uint64 {
+	const maskNodeID = uint64(1<<BitLenNodeID - 1)
+	return id & maskNodeID
 }
 
 // Decompose returns a set of Sonyflake ID parts.
 func Decompose(id uint64) map[string]uint64 {
-	msb := id >> 63
+	msb := id >> 64
 	time := elapsedTime(id)
 	sequence := SequenceNumber(id)
-	machineID := MachineID(id)
+	NodeID := NodeID(id)
 	return map[string]uint64{
 		"id":         id,
 		"msb":        msb,
 		"time":       time,
+		"node":    NodeID,
 		"sequence":   sequence,
-		"machine-id": machineID,
 	}
 }
